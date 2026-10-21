@@ -14,7 +14,7 @@ export function makeHandler({env,sendMail,now=Date.now}){
    if(!timingSafeEqual(expected,Buffer.from(signature,'hex')))return reply(401,{error:'unauthorized'});
    data=JSON.parse(payload);
    if(!Number.isFinite(data.timestamp)||Math.abs(now()-data.timestamp)>300000)return reply(401,{error:'unauthorized'});
-   if(!/^[a-f0-9-]{36}:(owner|candidate)$/.test(data.id)||!['owner','candidate'].includes(data.kind)||!data.id.endsWith(':'+data.kind)||!email(data.to)||(data.kind==='owner'&&data.to!==owner)||typeof data.subject!=='string'||data.subject.length>300||/[\r\n]/.test(data.subject)||typeof data.body!=='string'||data.body.length>25000)throw Error();
+   if(!/^[a-f0-9-]{36}:(owner|candidate|invite)$/.test(data.id)||!['owner','candidate','invite'].includes(data.kind)||!data.id.endsWith(':'+data.kind)||!email(data.to)||(data.kind==='owner'&&data.to!==owner)||typeof data.subject!=='string'||data.subject.length>300||/[\r\n]/.test(data.subject)||typeof data.body!=='string'||data.body.length>25000)throw Error();
   }catch{return reply(400,{error:'invalid_payload'});}
   try{
    const result=await sendMail({from:{name:'Димитър Стоянов | EUROSPEED',address:owner},to:data.to,replyTo:owner,subject:data.subject,text:data.body,messageId:`<${data.id.replace(':','.') }@eu-speed.com>`,disableFileAccess:true,disableUrlAccess:true});

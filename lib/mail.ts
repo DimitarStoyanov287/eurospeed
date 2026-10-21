@@ -3,6 +3,13 @@ export const validEmail=(s:string)=>s.length<=254&&/^[^\s,;<>@]+@[^\s,;<>@]+\.[^
 export const validSmtpRelay=(s:string)=>/^https:\/\/[a-z0-9][a-z0-9-]*\.vercel\.app\/api\/send$/.test(s);
 export const validWebhook=(s:string)=>validSmtpRelay(s)||/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(s);
 export async function mailConfig(env:any){const row=await env.DB.prepare('SELECT value FROM app_settings WHERE key=?').bind('mail_webhook_url').first();const url=row?.value||env.MAIL_WEBHOOK_URL||'';return {url,provider:validSmtpRelay(url)?'smtp':'apps-script',configured:!!env.MAIL_WEBHOOK_SECRET&&validWebhook(url)}}
+export function invitationJob(db:any,a:any,token:string,tokenHash:string,baseUrl:string,now:number){
+ const name=String(a.name).replace(/[\r\n]/g,' ').slice(0,150);
+ const url=baseUrl.replace(/\/$/,'')+'?invite='+encodeURIComponent(token);
+ const subject='Покана за практическа задача | EUROSPEED';
+ const body=`Здравей, ${name},\n\nБлагодаря ти за интереса към позицията Junior ERP Developer в EUROSPEED. Каним те да решиш кратка практическа задача по JavaScript и PostgreSQL.\n\nТвоят индивидуален линк:\n${url}\n\nМожеш да започнеш до ${new Date(a.expires_at).toLocaleString('bg-BG',{timeZone:'Europe/Sofia'})} (Europe/Sofia). След стартиране имаш 50 минути. Отварянето на линка не стартира таймера. Използвай компютър и работи самостоятелно. Не споделяй линка.\n\nПри въпроси отговори на този имейл.\n\nПоздрави,\nДимитър Стоянов\nEUROSPEED\nd.stoyanov@eu-speed.com`;
+ return db.prepare("INSERT OR IGNORE INTO email_jobs (id,attempt_id,kind,recipient,subject,body,next_attempt_at,created_at) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM attempts WHERE id=? AND token_hash=? AND revoked=0 AND started_at IS NULL)").bind(a.id+':invite',a.id,'invite',a.email,subject,body,now,now,a.id,tokenHash);
+}
 export function submissionJobs(db:any,a:any,submitted:number,baseUrl:string){
  const name=String(a.name).replace(/[\r\n]/g,' ').slice(0,150);
  const date=new Date(submitted).toLocaleString('bg-BG',{timeZone:'Europe/Sofia'});

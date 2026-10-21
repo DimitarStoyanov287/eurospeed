@@ -17,3 +17,5 @@ test('rejects forged requests, old requests, wrong owner and injected headers',a
 });
 test('ambiguous failures never claim success',async()=>{const r=await call({error:{code:'ETIMEDOUT'}});assert.equal(r.state,'uncertain')});
 test('auth failure is explicit and contains no password',async()=>{const r=await call({error:{code:'EAUTH',message:'secret server response'}});assert.equal(r.error,'smtp_authentication_failed');assert.ok(!JSON.stringify(r).includes('secret server response'))});
+
+test('accepts signed invitation mail',async()=>{const r=await call({}, {id:data.id.replace('candidate','invite'),kind:'invite'});assert.equal(r.ok,true);assert.equal(r.sends,1)});

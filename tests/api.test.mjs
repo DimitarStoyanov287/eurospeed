@@ -30,5 +30,25 @@ const all=await (await getAdmin()).json();assert.equal(all.attempts[0].score_sql
 const other=await (await POST(req({action:'invite',name:'Timer QA',email:'timer@example.com'},'','test-admin-key'))).json();await POST(req({action:'start'},other.token));sqlite.prepare('UPDATE attempts SET deadline=? WHERE id=?').run(Date.now()-1,other.id);assert.equal((await POST(req(payload,other.token))).status,409);
 await POST(req({action:'revoke',id:other.id},'','test-admin-key'));assert.equal((await GET(req(null,other.token))).status,404);
 assert.equal((await POST(new Request('https://assessment.test/api/assessment',{method:'POST',headers:{Origin:'https://evil.test'},body:'{}'}))).status,403);
+// Invitation delivery is opt-in and queues one mail per attempt, never arbitrary recipients.
+assert.equal((await POST(req({action:'sendInvite',id:other.id}))).status,401);
+globalThis.__assessmentEnv.MAIL_WEBHOOK_SECRET='test-signing-secret';
+globalThis.__assessmentEnv.MAIL_WEBHOOK_URL='https://eurospeed-seven.vercel.app/api/send';
+const emailed=await (await POST(req({action:'invite',name:'Invitation QA',email:'invite@example.com',sendEmail:true},'','test-admin-key'))).json();
+assert.ok(emailed.token);assert.equal(emailed.queued,true);
+const invitation=sqlite.prepare("SELECT * FROM email_jobs WHERE id=?").get(emailed.id+':invite');
+assert.equal(invitation.recipient,'invite@example.com');assert.ok(invitation.body.includes('?invite='+emailed.token));assert.ok(invitation.body.includes('50 минути'));
+const beforeOpen=await (await GET(req(null,emailed.token))).json();assert.equal(beforeOpen.attempt.opened_at,null);
+await POST(req({action:'opened'},emailed.token));const opened=await (await GET(req(null,emailed.token))).json();assert.ok(opened.attempt.opened_at);assert.equal(opened.attempt.started_at,null);assert.equal(opened.attempt.deadline,null);
+await POST(req({action:'opened'},emailed.token));assert.equal((await (await GET(req(null,emailed.token))).json()).attempt.opened_at,opened.attempt.opened_at);
+await POST(req({action:'sendInvite',id:emailed.id,email:'attacker@example.com'},'','test-admin-key'));assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM email_jobs WHERE attempt_id=?").get(emailed.id).n,1);assert.equal((await GET(req(null,emailed.token))).status,200);
+const manual=await (await POST(req({action:'invite',name:'Manual QA',email:'manual@example.com'},'','test-admin-key'))).json();
+assert.equal((await POST(req({action:'sendInvite',id:manual.id,email:'attacker@example.com'},'','test-admin-key'))).status,200);
+assert.equal((await GET(req(null,manual.token))).status,404);
+const manualJob=sqlite.prepare('SELECT * FROM email_jobs WHERE id=?').get(manual.id+':invite');assert.equal(manualJob.recipient,'manual@example.com');
+const freshToken=new URL(manualJob.body.match(/https:\/\/[^\s]+/)[0]).searchParams.get('invite');
+assert.equal((await GET(req(null,freshToken))).status,200);
+await POST(req({action:'start'},freshToken));assert.equal((await POST(req({action:'sendInvite',id:manual.id},'','test-admin-key'))).status,409);
+await POST(req({action:'revoke',id:emailed.id},'','test-admin-key'));assert.equal((await POST(req({action:'opened'},emailed.token))).status,404);
 fs.unlinkSync('tests/.api-generated.mjs');
 console.log('PASS: admin authorization, invitation tokens, start idempotence, server timer, autosave, revision conflicts, submission lock, scoring validation, expiry, revocation, cross-origin rejection.');

@@ -9,7 +9,7 @@ const worker = {
     const origin=request.headers.get('Origin');
     const isApi=new URL(request.url).pathname.startsWith('/api/');
     if(isApi && request.method==='OPTIONS') return new Response(null,{status:originAllowed(origin,request.url,env)?204:403,headers:corsHeaders(origin,request.url,env)});
-    const mailTrigger = request.method === 'POST' && new URL(request.url).pathname === '/api/assessment' ? await request.clone().json().then((body:any) => body?.action === 'submit').catch(() => false) : false;
+    const mailTrigger = request.method === 'POST' && new URL(request.url).pathname === '/api/assessment' ? await request.clone().json().then((body:any) => body?.action === 'submit' || body?.action === 'sendInvite' || body?.action === 'invite' && body?.sendEmail === true).catch(() => false) : false;
     let binding = ctx.props?.CONNECTORS;
     // Local preview emulates the same request-scoped capability. This branch and
     // the auxiliary service binding are absent from production builds.

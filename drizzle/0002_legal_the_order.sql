@@ -1,0 +1,1 @@
+ALTER TABLE `attempts` ADD `opened_at` integer;
