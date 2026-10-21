@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import fs from 'node:fs';
+import vm from 'node:vm';
+import {createHmac} from 'node:crypto';
+import {drainOutbox,submissionJobs} from '../lib/mail.ts';
+const sqlite=new DatabaseSync(':memory:');for(const f of fs.readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())sqlite.exec(fs.readFileSync('drizzle/'+f,'utf8').replaceAll('--> statement-breakpoint',''));
+const DB={prepare(query){return {params:[],bind(...p){this.params=p;return this},async first(){return sqlite.prepare(query).get(...this.params)||null},async all(){return {results:sqlite.prepare(query).all(...this.params)}},async run(){const r=sqlite.prepare(query).run(...this.params);return {meta:{changes:r.changes}}}}}};
+const now=Date.now(),a={id:'00000000-0000-4000-8000-000000000001',name:'Test Candidate',email:'test@example.com'};
+sqlite.prepare('INSERT INTO attempts (id,token_hash,name,email,variant,created_at,expires_at,submitted_at) VALUES (?,?,?,?,?,?,?,?)').run(a.id,'hash',a.name,a.email,0,now,now,now);
+for(const q of submissionJobs(DB,a,now,'https://assessment.test'))await q.run();for(const q of submissionJobs(DB,a,now,'https://assessment.test'))await q.run();assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM email_jobs').get().n,2);
+let count=0;const env={DB,MAIL_WEBHOOK_SECRET:'a-strong-test-key',MAIL_WEBHOOK_URL:'https://script.google.com/macros/s/test/exec'};
+const provider=async(url,options)=>{count++;assert.equal(url,env.MAIL_WEBHOOK_URL);const envelope=JSON.parse(options.body);assert.equal(envelope.signature,createHmac('sha256',env.MAIL_WEBHOOK_SECRET).update(envelope.payload).digest('hex'));const p=JSON.parse(envelope.payload);return Response.json({ok:true,id:p.id})};
+assert.deepEqual(await drainOutbox({DB}),{configured:false,sent:0});
+await Promise.all([drainOutbox(env,provider),drainOutbox(env,provider)]);assert.equal(count,2);assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM email_jobs WHERE status='sent'").get().n,2);await drainOutbox(env,provider);assert.equal(count,2);
+const id=a.id+':candidate';sqlite.prepare("UPDATE email_jobs SET status='pending',next_attempt_at=0 WHERE id=?").run(id);await drainOutbox(env,async()=>Response.json({ok:false,state:'uncertain'}));assert.equal(sqlite.prepare('SELECT status FROM email_jobs WHERE id=?').get(id).status,'uncertain');await drainOutbox(env,provider);assert.equal(count,2);
+sqlite.prepare("UPDATE email_jobs SET status='pending',tries=0,next_attempt_at=0 WHERE id=?").run(id);await drainOutbox(env,async()=>{throw new Error('timeout')});assert.equal(sqlite.prepare('SELECT status,tries FROM email_jobs WHERE id=?').get(id).status,'pending');assert.equal(sqlite.prepare('SELECT tries FROM email_jobs WHERE id=?').get(id).tries,1);
+// Exercise the actual Apps Script source without sending real mail.
+const props=new Map([['MAIL_WEBHOOK_SECRET','script-test-secret']]);let sends=0,throwDuringSend=false,effectiveEmail='d.stoyanov@eu-speed.com';
+const context=vm.createContext({Date,JSON,Utilities:{computeHmacSha256Signature:(p,k)=>[...createHmac('sha256',k).update(p).digest()]},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k)||null,setProperty:(k,v)=>props.set(k,v),getProperties:()=>Object.fromEntries(props),deleteProperty:k=>props.delete(k)})},Session:{getEffectiveUser:()=>({getEmail:()=>effectiveEmail})},MailApp:{getRemainingDailyQuota:()=>100,sendEmail:m=>{assert.equal(m.replyTo,'d.stoyanov@eu-speed.com');sends++;if(throwDuringSend)throw new Error('ambiguous failure')}},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}});
+vm.runInContext(fs.readFileSync('integrations/google-apps-script/Code.gs','utf8'),context);
+const scriptCall=(p,forged=false)=>{const payload=JSON.stringify(p);return context.doPost({postData:{contents:JSON.stringify({payload,signature:forged?'bad':createHmac('sha256','script-test-secret').update(payload).digest('hex')})}})};
+let payload={id:a.id+':owner',kind:'owner',to:'d.stoyanov@eu-speed.com',subject:'Test',body:'Text',timestamp:Date.now()};assert.equal(scriptCall(payload,true).error,'unauthorized');assert.equal(sends,0);assert.equal(scriptCall(payload).ok,true);assert.equal(scriptCall(payload).ok,true);assert.equal(sends,1);
+payload={...payload,id:a.id+':candidate',kind:'candidate',to:'test@example.com'};throwDuringSend=true;assert.equal(scriptCall(payload).state,'uncertain');assert.equal(scriptCall(payload).state,'uncertain');assert.equal(sends,2);
+effectiveEmail='other@example.com';assert.equal(scriptCall(payload).error,'wrong_sender');assert.equal(sends,2);
+console.log('PASS: atomic job identity, two independent recipients, HMAC, concurrency lease, no duplicate sends, retry/backoff, ambiguous-delivery quarantine, Apps Script sender validation and idempotency. No real emails sent.');

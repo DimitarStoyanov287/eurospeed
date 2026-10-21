@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+const {CLOUDFLARE_D1_DATABASE_ID,CLOUDFLARE_WORKER_NAME,SITE_BASE_URL}=process.env;
+if(!/^[a-f0-9-]{36}$/.test(CLOUDFLARE_D1_DATABASE_ID||''))throw new Error('Set CLOUDFLARE_D1_DATABASE_ID to the new D1 database UUID.');
+if(!/^[a-z][a-z0-9-]{2,62}$/.test(CLOUDFLARE_WORKER_NAME||''))throw new Error('Set CLOUDFLARE_WORKER_NAME.');
+if(!SITE_BASE_URL||new URL(SITE_BASE_URL).protocol!=='https:')throw new Error('Set SITE_BASE_URL to the final HTTPS origin.');
+const config=JSON.parse(fs.readFileSync('dist/server/wrangler.json','utf8'));
+config.name=CLOUDFLARE_WORKER_NAME;
+config.d1_databases=[{binding:'DB',database_name:'eurospeed-assessment',database_id:CLOUDFLARE_D1_DATABASE_ID,migrations_dir:'../../drizzle'}];
+config.vars={...config.vars,SITE_BASE_URL:new URL(SITE_BASE_URL).origin};
+config.triggers={crons:['*/5 * * * *']};
+delete config.topLevelName;
+fs.writeFileSync('dist/server/wrangler.external.json',JSON.stringify(config,null,2)+'\n');
+console.log('External deployment config prepared. Existing Sites identity and database were not modified.');
