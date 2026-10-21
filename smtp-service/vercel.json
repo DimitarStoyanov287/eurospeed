@@ -1,0 +1,1 @@
+{"functions":{"api/send.js":{"maxDuration":15}},"headers":[{"source":"/(.*)","headers":[{"key":"Cache-Control","value":"no-store"}]}]}

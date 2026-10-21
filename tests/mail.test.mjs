@@ -15,6 +15,15 @@ assert.deepEqual(await drainOutbox({DB}),{configured:false,sent:0});
 await Promise.all([drainOutbox(env,provider),drainOutbox(env,provider)]);assert.equal(count,2);assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM email_jobs WHERE status='sent'").get().n,2);await drainOutbox(env,provider);assert.equal(count,2);
 const id=a.id+':candidate';sqlite.prepare("UPDATE email_jobs SET status='pending',next_attempt_at=0 WHERE id=?").run(id);await drainOutbox(env,async()=>Response.json({ok:false,state:'uncertain'}));assert.equal(sqlite.prepare('SELECT status FROM email_jobs WHERE id=?').get(id).status,'uncertain');await drainOutbox(env,provider);assert.equal(count,2);
 sqlite.prepare("UPDATE email_jobs SET status='pending',tries=0,next_attempt_at=0 WHERE id=?").run(id);await drainOutbox(env,async()=>{throw new Error('timeout')});assert.equal(sqlite.prepare('SELECT status,tries FROM email_jobs WHERE id=?').get(id).status,'pending');assert.equal(sqlite.prepare('SELECT tries FROM email_jobs WHERE id=?').get(id).tries,1);
+// SMTP transport cannot safely retry an unknown send outcome.
+const smtpEnv={...env,MAIL_WEBHOOK_URL:'https://eurospeed-smtp.vercel.app/api/send'};
+sqlite.prepare("UPDATE email_jobs SET status='pending',tries=0,next_attempt_at=0 WHERE id=?").run(id);
+await drainOutbox(smtpEnv,async()=>{throw new Error('lost acknowledgement')});
+assert.equal(sqlite.prepare('SELECT status FROM email_jobs WHERE id=?').get(id).status,'uncertain');
+let smtpSends=0;await drainOutbox(smtpEnv,async()=>{smtpSends++;throw Error()});assert.equal(smtpSends,0);
+sqlite.prepare("UPDATE email_jobs SET status='processing',lease_until=0 WHERE id=?").run(id);
+await drainOutbox(smtpEnv,async()=>{smtpSends++;throw Error()});assert.equal(smtpSends,0);
+assert.equal(sqlite.prepare('SELECT status FROM email_jobs WHERE id=?').get(id).status,'uncertain');
 // Exercise the actual Apps Script source without sending real mail.
 const props=new Map([['MAIL_WEBHOOK_SECRET','script-test-secret']]);let sends=0,throwDuringSend=false,effectiveEmail='d.stoyanov@eu-speed.com';
 const context=vm.createContext({Date,JSON,Utilities:{computeHmacSha256Signature:(p,k)=>[...createHmac('sha256',k).update(p).digest()]},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k)||null,setProperty:(k,v)=>props.set(k,v),getProperties:()=>Object.fromEntries(props),deleteProperty:k=>props.delete(k)})},Session:{getEffectiveUser:()=>({getEmail:()=>effectiveEmail})},MailApp:{getRemainingDailyQuota:()=>100,sendEmail:m=>{assert.equal(m.replyTo,'d.stoyanov@eu-speed.com');sends++;if(throwDuringSend)throw new Error('ambiguous failure')}},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}});
